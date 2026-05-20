@@ -1,0 +1,1327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RAVE.EXE — Air DJ</title>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech&family=Audiowide&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:      #030308;
+  --panel:   #06060f;
+  --surface: #0a0a18;
+  --border:  #14143a;
+  --border2: #1e1e50;
+
+  --mag:     #ff00aa;   /* magenta */
+  --acid:    #aaff00;   /* acid green */
+  --cyan:    #00ffee;   /* cyan */
+  --orange:  #ff6600;   /* orange */
+  --purple:  #8800ff;   /* purple */
+
+  --text:    #dde0ff;
+  --muted:   #3a3a70;
+  --dim:     #0d0d28;
+}
+
+html, body { height: 100%; overflow: hidden; background: var(--bg); }
+
+body {
+  font-family: 'Share Tech', monospace;
+  color: var(--text);
+  display: grid;
+  grid-template-rows: 48px 1fr;
+  height: 100vh;
+}
+
+/* ── CRT scanlines ──────────────────────────── */
+body::before {
+  content: '';
+  position: fixed; inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent 0px, transparent 3px,
+    rgba(0,0,0,0.18) 3px, rgba(0,0,0,0.18) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ── CRT vignette ───────────────────────────── */
+body::after {
+  content: '';
+  position: fixed; inset: 0;
+  background: radial-gradient(ellipse 85% 80% at 50% 50%, transparent 55%, rgba(0,0,0,0.7) 100%);
+  pointer-events: none;
+  z-index: 9998;
+}
+
+/* ── HEADER ─────────────────────────────────── */
+header {
+  position: relative; z-index: 100;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 1.4rem;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border2);
+}
+
+.brand {
+  font-family: 'Audiowide', cursive;
+  font-size: 1.2rem;
+  letter-spacing: 0.15em;
+  color: var(--mag);
+  text-shadow: 0 0 20px var(--mag), 0 0 40px rgba(255,0,170,0.4);
+  animation: flicker 4s ease-in-out infinite;
+}
+.brand span { color: var(--acid); text-shadow: 0 0 20px var(--acid); }
+
+@keyframes flicker {
+  0%,19%,21%,100% { opacity: 1; }
+  20% { opacity: 0.7; }
+}
+
+.header-tags { display: flex; align-items: center; gap: 8px; }
+.htag {
+  font-size: 0.46rem; letter-spacing: 0.16em; text-transform: uppercase;
+  padding: 3px 10px; border: 1px solid var(--border2);
+  color: var(--muted); display: flex; align-items: center; gap: 5px;
+  transition: all 0.3s;
+}
+.htag .pip { width: 5px; height: 5px; border-radius: 50%; background: var(--muted); transition: all 0.3s; }
+.htag.on { color: var(--acid); border-color: rgba(170,255,0,0.3); }
+.htag.on .pip { background: var(--acid); box-shadow: 0 0 8px var(--acid); animation: blink 1s ease-in-out infinite; }
+@keyframes blink { 0%,100%{opacity:1}50%{opacity:0.2} }
+
+/* ── MAIN LAYOUT ────────────────────────────── */
+.app {
+  position: relative; z-index: 1;
+  display: grid;
+  grid-template-columns: 1fr 360px;
+  overflow: hidden;
+}
+
+/* ── LEFT: CAMERA + VISUALISER ──────────────── */
+.main-section {
+  display: flex; flex-direction: column;
+  border-right: 1px solid var(--border2);
+  overflow: hidden;
+  position: relative;
+}
+
+/* Camera */
+.cam-wrap {
+  position: relative;
+  flex: 1;
+  background: #000;
+  overflow: hidden;
+  min-height: 0;
+}
+
+video { display: none; }
+
+canvas#cam-feed {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+  transform: scaleX(-1);
+  filter: brightness(0.6) saturate(0) contrast(1.2);
+}
+
+canvas#hand-ovl {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+  transform: scaleX(-1);
+}
+
+/* Overlay zone labels */
+.zone-overlay {
+  position: absolute; inset: 0;
+  pointer-events: none;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+.zone {
+  border: 1px dashed rgba(255,255,255,0.04);
+  display: flex; align-items: flex-end; justify-content: flex-start;
+  padding: 8px 10px;
+  font-size: 0.42rem; letter-spacing: 0.2em; text-transform: uppercase;
+  color: rgba(255,255,255,0.12);
+  transition: all 0.3s;
+}
+.zone.active {
+  border-color: rgba(255,0,170,0.3);
+  background: rgba(255,0,170,0.03);
+  color: rgba(255,0,170,0.5);
+}
+
+/* Hand position markers */
+.hand-marker {
+  position: absolute;
+  width: 60px; height: 60px;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 6;
+  transform: translate(-50%, -50%);
+  transition: left 0.04s, top 0.04s;
+}
+
+#hand-L-marker {
+  border: 2px solid var(--mag);
+  box-shadow: 0 0 20px var(--mag), inset 0 0 10px rgba(255,0,170,0.2);
+}
+#hand-R-marker {
+  border: 2px solid var(--acid);
+  box-shadow: 0 0 20px var(--acid), inset 0 0 10px rgba(170,255,0,0.2);
+}
+
+.hand-label {
+  position: absolute;
+  top: -20px; left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.44rem; letter-spacing: 0.16em; white-space: nowrap;
+}
+
+/* Control readouts on camera */
+.cam-readout {
+  position: absolute;
+  top: 14px; left: 16px;
+  z-index: 5; pointer-events: none;
+  display: flex; flex-direction: column; gap: 5px;
+}
+
+.readout-line {
+  font-size: 0.55rem; letter-spacing: 0.12em; text-transform: uppercase;
+  color: rgba(170,255,0,0.7);
+  text-shadow: 0 0 8px var(--acid);
+  display: flex; align-items: center; gap: 6px;
+}
+.readout-bar {
+  width: 60px; height: 3px; background: rgba(255,255,255,0.1);
+  overflow: hidden;
+}
+.readout-bar-fill { height: 100%; background: var(--acid); transition: width 0.1s; }
+
+/* BPM display */
+.bpm-display {
+  position: absolute;
+  top: 14px; right: 16px;
+  z-index: 5; pointer-events: none;
+  text-align: right;
+}
+.bpm-num {
+  font-family: 'Audiowide', cursive;
+  font-size: clamp(2rem, 5vw, 3.5rem);
+  line-height: 1;
+  color: var(--mag);
+  text-shadow: 0 0 30px var(--mag), 0 0 60px rgba(255,0,170,0.4);
+}
+.bpm-label {
+  font-size: 0.44rem; letter-spacing: 0.3em; text-transform: uppercase;
+  color: rgba(255,0,170,0.4);
+  margin-top: 2px;
+}
+
+/* Beat flash */
+.beat-flash {
+  position: absolute; inset: 0;
+  z-index: 4; pointer-events: none;
+  border: 3px solid transparent;
+  transition: border-color 0.05s, box-shadow 0.05s;
+}
+.beat-flash.bang {
+  border-color: rgba(255,0,170,0.6);
+  box-shadow: inset 0 0 60px rgba(255,0,170,0.15);
+}
+
+/* No hand message */
+.no-hand {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  z-index: 4; pointer-events: none;
+  opacity: 0; transition: opacity 0.4s;
+  flex-direction: column; gap: 8px;
+}
+.no-hand.show { opacity: 1; }
+.no-hand-text {
+  font-family: 'Audiowide', cursive;
+  font-size: 1.2rem; letter-spacing: 0.1em;
+  color: rgba(255,0,170,0.25); text-align: center; line-height: 1.6;
+}
+
+/* ── WAVEFORM + VU ──────────────────────────── */
+.viz-strip {
+  height: 80px;
+  border-top: 1px solid var(--border2);
+  background: var(--panel);
+  display: grid;
+  grid-template-columns: 1fr 80px;
+  flex-shrink: 0;
+}
+
+canvas#waveform { width: 100%; height: 80px; display: block; }
+canvas#vu-meter { width: 80px; height: 80px; display: block; border-left: 1px solid var(--border2); }
+
+/* ── RIGHT: DJ CONSOLE ──────────────────────── */
+.console {
+  background: var(--panel);
+  display: flex; flex-direction: column;
+  overflow-y: auto; overflow-x: hidden;
+}
+.console::-webkit-scrollbar { width: 3px; }
+.console::-webkit-scrollbar-thumb { background: var(--border2); }
+
+.csec {
+  padding: 1rem 1.1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.csec-label {
+  font-size: 0.46rem; letter-spacing: 0.25em; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 0.8rem;
+  display: flex; align-items: center; gap: 8px;
+}
+.csec-label::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+/* ── VIRTUAL KNOBS ──────────────────────────── */
+.knob-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; }
+
+.knob-wrap {
+  display: flex; flex-direction: column; align-items: center; gap: 5px;
+}
+
+.knob {
+  position: relative;
+  width: 52px; height: 52px;
+  cursor: default;
+}
+
+.knob svg { width: 52px; height: 52px; }
+
+.knob-val {
+  font-family: 'Audiowide', cursive;
+  font-size: 0.62rem; letter-spacing: 0.05em;
+  text-align: center;
+  color: var(--text);
+  transition: color 0.2s;
+}
+
+.knob-name {
+  font-size: 0.42rem; letter-spacing: 0.18em; text-transform: uppercase;
+  color: var(--muted); text-align: center;
+}
+
+/* ── BEAT PADS ──────────────────────────────── */
+.pad-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 5px; }
+
+.beat-pad {
+  aspect-ratio: 1;
+  border: 1.5px solid var(--border2);
+  background: var(--dim);
+  border-radius: 2px;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  cursor: pointer;
+  transition: all 0.08s;
+  font-size: 0.5rem; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--muted);
+  gap: 2px;
+}
+.beat-pad .pad-name { font-size: 0.48rem; }
+.beat-pad .pad-key  { font-size: 0.38rem; opacity: 0.5; }
+
+.beat-pad:hover, .beat-pad.active {
+  border-color: var(--color, var(--mag));
+  background: rgba(var(--rgb, 255,0,170),0.15);
+  color: var(--color, var(--mag));
+  box-shadow: 0 0 12px rgba(var(--rgb, 255,0,170),0.3);
+}
+.beat-pad.playing {
+  background: var(--color, var(--mag));
+  color: #000;
+  box-shadow: 0 0 20px var(--color, var(--mag));
+}
+
+/* ── HAND GESTURE GUIDE ─────────────────────── */
+.gesture-guide { display: flex; flex-direction: column; gap: 5px; }
+
+.gesture-row {
+  display: flex; align-items: center;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  background: var(--dim);
+  border-radius: 2px;
+  gap: 10px;
+  transition: border-color 0.2s, background 0.2s;
+}
+.gesture-row.active {
+  border-color: var(--mag);
+  background: rgba(255,0,170,0.06);
+}
+
+.gest-hand {
+  font-size: 1rem;
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 6px rgba(255,0,170,0.5));
+}
+.gest-info { flex: 1; }
+.gest-name { font-size: 0.6rem; letter-spacing: 0.06em; color: var(--text); }
+.gest-desc { font-size: 0.46rem; letter-spacing: 0.04em; color: var(--muted); margin-top: 2px; }
+.gest-val  { font-family: 'Audiowide', cursive; font-size: 0.7rem; color: var(--mag); text-align: right; transition: color 0.2s; }
+
+/* ── SEQUENCER ──────────────────────────────── */
+.seq-grid { display: grid; grid-template-columns: repeat(8,1fr); gap: 3px; }
+.seq-step {
+  height: 20px; border: 1px solid var(--border2);
+  background: var(--dim); cursor: pointer;
+  transition: all 0.08s; border-radius: 1px;
+}
+.seq-step.on { background: var(--mag); border-color: var(--mag); box-shadow: 0 0 6px var(--mag); }
+.seq-step.current { border-color: var(--acid); }
+
+/* ── LOADING ────────────────────────────────── */
+#loading {
+  position: absolute; inset: 0;
+  background: var(--bg);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 1.4rem; z-index: 30;
+  transition: opacity 0.8s;
+}
+#loading.gone { opacity: 0; pointer-events: none; }
+
+.load-title {
+  font-family: 'Audiowide', cursive;
+  font-size: 3rem; letter-spacing: 0.2em;
+  color: var(--mag);
+  text-shadow: 0 0 40px var(--mag), 0 0 80px rgba(255,0,170,0.4);
+  animation: flicker 2s ease-in-out infinite;
+}
+.load-msg { font-size: 0.52rem; letter-spacing: 0.2em; text-transform: uppercase; color: var(--muted); }
+.load-bar { width: 220px; height: 2px; background: var(--border2); overflow: hidden; }
+.load-fill { height: 100%; background: var(--mag); width: 0%; animation: lf 2.5s ease forwards; box-shadow: 0 0 8px var(--mag); }
+@keyframes lf { to { width: 100%; } }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">RAVE<span>.EXE</span></div>
+  <div class="header-tags">
+    <div class="htag" id="htag-cam"><div class="pip"></div><span id="htag-cam-txt">Offline</span></div>
+    <div class="htag" id="htag-hands"><div class="pip"></div><span id="htag-hands-txt">No Hands</span></div>
+    <div class="htag" id="htag-audio"><div class="pip"></div><span id="htag-audio-txt">Audio Off</span></div>
+  </div>
+</header>
+
+<div class="app">
+
+  <!-- LEFT: Camera + Viz -->
+  <div class="main-section">
+    <div class="cam-wrap" id="cam-wrap">
+      <video id="video" autoplay muted playsinline></video>
+      <canvas id="cam-feed"></canvas>
+      <canvas id="hand-ovl"></canvas>
+
+      <!-- Zone overlay -->
+      <div class="zone-overlay" id="zone-overlay">
+        <div class="zone" id="zone-TL" data-zone="TL">BPM ↑</div>
+        <div class="zone" id="zone-TC" data-zone="TC">PITCH</div>
+        <div class="zone" id="zone-TR" data-zone="TR">BPM ↓</div>
+        <div class="zone" id="zone-BL" data-zone="BL">FILTER</div>
+        <div class="zone" id="zone-BC" data-zone="BC">REVERB</div>
+        <div class="zone" id="zone-BR" data-zone="BR">VOLUME</div>
+      </div>
+
+      <!-- Hand markers -->
+      <div id="hand-L-marker" class="hand-marker" style="left:-100px;top:-100px">
+        <div class="hand-label" style="color:var(--mag)">L ✋</div>
+      </div>
+      <div id="hand-R-marker" class="hand-marker" style="left:-100px;top:-100px">
+        <div class="hand-label" style="color:var(--acid)">R ✋</div>
+      </div>
+
+      <!-- Readouts -->
+      <div class="cam-readout">
+        <div class="readout-line">FILTER <div class="readout-bar"><div class="readout-bar-fill" id="ro-filter" style="width:50%"></div></div></div>
+        <div class="readout-line">REVERB <div class="readout-bar"><div class="readout-bar-fill" id="ro-reverb" style="width:20%"></div></div></div>
+        <div class="readout-line">VOLUME <div class="readout-bar"><div class="readout-bar-fill" id="ro-vol" style="width:80%"></div></div></div>
+      </div>
+
+      <!-- BPM -->
+      <div class="bpm-display">
+        <div class="bpm-num" id="bpm-num">128</div>
+        <div class="bpm-label">BPM</div>
+      </div>
+
+      <div class="beat-flash" id="beat-flash"></div>
+
+      <div class="no-hand show" id="no-hand">
+        <div class="no-hand-text">RAISE BOTH<br>HANDS TO<br>START MIXING</div>
+      </div>
+
+      <div id="loading">
+        <div class="load-title">RAVE.EXE</div>
+        <div class="load-msg" id="load-msg">Initializing hand tracking…</div>
+        <div class="load-bar"><div class="load-fill"></div></div>
+      </div>
+    </div>
+
+    <!-- Viz strip -->
+    <div class="viz-strip">
+      <canvas id="waveform"></canvas>
+      <canvas id="vu-meter"></canvas>
+    </div>
+  </div>
+
+  <!-- RIGHT: Console -->
+  <div class="console">
+
+    <!-- Knobs -->
+    <div class="csec">
+      <div class="csec-label">Parameters</div>
+      <div class="knob-grid" id="knob-grid">
+        <!-- Injected by JS -->
+      </div>
+    </div>
+
+    <!-- Beat Pads -->
+    <div class="csec">
+      <div class="csec-label">Beat Pads — Click or gesture</div>
+      <div class="pad-grid" id="pad-grid">
+        <!-- Injected by JS -->
+      </div>
+    </div>
+
+    <!-- Sequencer -->
+    <div class="csec">
+      <div class="csec-label">Step Sequencer</div>
+      <div class="seq-grid" id="seq-grid"></div>
+    </div>
+
+    <!-- Gesture guide -->
+    <div class="csec" style="flex:1">
+      <div class="csec-label">Hand Controls</div>
+      <div class="gesture-guide" id="gesture-guide">
+        <div class="gesture-row" id="gest-L">
+          <div class="gest-hand">🤚</div>
+          <div class="gest-info">
+            <div class="gest-name">Left Hand — X axis</div>
+            <div class="gest-desc">Move left/right to sweep filter frequency</div>
+          </div>
+          <div class="gest-val" id="gv-L">—</div>
+        </div>
+        <div class="gesture-row" id="gest-Ly">
+          <div class="gest-hand">🤚</div>
+          <div class="gest-info">
+            <div class="gest-name">Left Hand — Y axis</div>
+            <div class="gest-desc">Move up/down to control reverb amount</div>
+          </div>
+          <div class="gest-val" id="gv-Ly">—</div>
+        </div>
+        <div class="gesture-row" id="gest-R">
+          <div class="gest-hand">✋</div>
+          <div class="gest-info">
+            <div class="gest-name">Right Hand — Y axis</div>
+            <div class="gest-desc">Move up/down to control volume</div>
+          </div>
+          <div class="gest-val" id="gv-R">—</div>
+        </div>
+        <div class="gesture-row" id="gest-Rx">
+          <div class="gest-hand">✋</div>
+          <div class="gest-info">
+            <div class="gest-name">Right Hand — X axis</div>
+            <div class="gest-desc">Move left/right to shift pitch (±6 semitones)</div>
+          </div>
+          <div class="gest-val" id="gv-Rx">—</div>
+        </div>
+        <div class="gesture-row" id="gest-pinch">
+          <div class="gest-hand">🤌</div>
+          <div class="gest-info">
+            <div class="gest-name">Left Pinch</div>
+            <div class="gest-desc">Pinch thumb+index to activate loop</div>
+          </div>
+          <div class="gest-val" id="gv-pinch">OFF</div>
+        </div>
+        <div class="gesture-row" id="gest-fist">
+          <div class="gest-hand">✊</div>
+          <div class="gest-info">
+            <div class="gest-name">Right Fist</div>
+            <div class="gest-desc">Close fist to kill/mute all sound</div>
+          </div>
+          <div class="gest-val" id="gv-fist">OFF</div>
+        </div>
+        <div class="gesture-row" id="gest-open">
+          <div class="gest-hand">🖐</div>
+          <div class="gest-info">
+            <div class="gest-name">Right Open</div>
+            <div class="gest-desc">Open palm triggers stutter effect</div>
+          </div>
+          <div class="gest-val" id="gv-open">—</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════════════
+// AUDIO ENGINE
+// ══════════════════════════════════════════════════════
+let audioCtx = null;
+let masterGain, filterNode, reverbNode, reverbGain, dryGain;
+let pitchRatio = 1.0;
+let oscillators = {};
+let drumBuffers = {};
+let loopActive = false;
+let muteActive = false;
+let stutterInterval = null;
+let analyserNode;
+
+// Drum sequencer
+const SEQ_STEPS = 8;
+let seqPattern = [1,0,0,0,1,0,1,0]; // default pattern
+let seqStep = 0;
+let seqTimer = null;
+
+function initAudio() {
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+  masterGain = audioCtx.createGain();
+  masterGain.gain.value = 0.7;
+
+  filterNode = audioCtx.createBiquadFilter();
+  filterNode.type = 'lowpass';
+  filterNode.frequency.value = 8000;
+  filterNode.Q.value = 2;
+
+  reverbNode = audioCtx.createConvolver();
+  reverbGain = audioCtx.createGain();
+  dryGain    = audioCtx.createGain();
+  reverbGain.gain.value = 0.2;
+  dryGain.gain.value    = 0.8;
+
+  // Simple reverb impulse response
+  const revLen = audioCtx.sampleRate * 2;
+  const revBuf = audioCtx.createBuffer(2, revLen, audioCtx.sampleRate);
+  for (let ch = 0; ch < 2; ch++) {
+    const data = revBuf.getChannelData(ch);
+    for (let i = 0; i < revLen; i++) {
+      data[i] = (Math.random()*2-1) * Math.pow(1 - i/revLen, 1.5);
+    }
+  }
+  reverbNode.buffer = revBuf;
+
+  analyserNode = audioCtx.createAnalyser();
+  analyserNode.fftSize = 512;
+
+  // Routing: masterGain -> dryGain -> filterNode -> analyser -> destination
+  //          masterGain -> reverbGain -> reverbNode -> analyser -> destination
+  masterGain.connect(dryGain);
+  masterGain.connect(reverbGain);
+  dryGain.connect(filterNode);
+  filterNode.connect(analyserNode);
+  reverbGain.connect(reverbNode);
+  reverbNode.connect(analyserNode);
+  analyserNode.connect(audioCtx.destination);
+
+  // Pre-generate drum sounds
+  generateDrumSounds();
+
+  // Start beat engine
+  startBeatEngine();
+
+  document.getElementById('htag-audio').classList.add('on');
+  document.getElementById('htag-audio-txt').textContent = 'Audio On';
+}
+
+// ── Drum synthesis ──────────────────────────────────────
+function generateDrumSounds() {
+  drumBuffers.kick    = makeKick();
+  drumBuffers.snare   = makeSnare();
+  drumBuffers.hihat   = makeHiHat();
+  drumBuffers.clap    = makeClap();
+  drumBuffers.bass    = makeBass();
+  drumBuffers.synth   = makeSynth();
+  drumBuffers.tom     = makeTom();
+  drumBuffers.ride    = makeRide();
+}
+
+function makeBuffer(duration) {
+  const frames = Math.floor(audioCtx.sampleRate * duration);
+  return audioCtx.createBuffer(1, frames, audioCtx.sampleRate);
+}
+
+function makeKick() {
+  const buf = makeBuffer(0.5);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) {
+    const t = i / audioCtx.sampleRate;
+    const freq = 150 * Math.exp(-t * 30);
+    data[i] = Math.sin(2 * Math.PI * freq * t) * Math.exp(-t * 8) * 0.9;
+  }
+  return buf;
+}
+
+function makeSnare() {
+  const buf = makeBuffer(0.25);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) {
+    const t = i / audioCtx.sampleRate;
+    const tone  = Math.sin(2*Math.PI*200*t) * Math.exp(-t*20) * 0.3;
+    const noise = (Math.random()*2-1) * Math.exp(-t*15) * 0.7;
+    data[i] = (tone + noise) * 0.6;
+  }
+  return buf;
+}
+
+function makeHiHat() {
+  const buf = makeBuffer(0.08);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) {
+    const t = i / audioCtx.sampleRate;
+    data[i] = (Math.random()*2-1) * Math.exp(-t*60) * 0.4;
+  }
+  return buf;
+}
+
+function makeClap() {
+  const buf = makeBuffer(0.15);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) {
+    const t = i / audioCtx.sampleRate;
+    data[i] = (Math.random()*2-1) * Math.exp(-t*30) * 0.6 *
+              (1 + 0.5*Math.sin(2*Math.PI*800*t));
+  }
+  return buf;
+}
+
+function makeBass() {
+  const buf = makeBuffer(0.4);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) {
+    const t = i / audioCtx.sampleRate;
+    data[i] = Math.sin(2*Math.PI*80*t) * Math.exp(-t*5) * 0.8;
+  }
+  return buf;
+}
+
+function makeSynth() {
+  const buf = makeBuffer(0.3);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) {
+    const t = i / audioCtx.sampleRate;
+    data[i] = (Math.sin(2*Math.PI*440*t) + 0.5*Math.sin(2*Math.PI*880*t)) * Math.exp(-t*8) * 0.5;
+  }
+  return buf;
+}
+
+function makeTom() {
+  const buf = makeBuffer(0.3);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) {
+    const t = i / audioCtx.sampleRate;
+    const freq = 120 * Math.exp(-t*10);
+    data[i] = Math.sin(2*Math.PI*freq*t) * Math.exp(-t*10) * 0.7;
+  }
+  return buf;
+}
+
+function makeRide() {
+  const buf = makeBuffer(0.3);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) {
+    const t = i / audioCtx.sampleRate;
+    data[i] = (Math.random()*2-1) * Math.exp(-t*15) * 0.3;
+  }
+  return buf;
+}
+
+// ── Play drum sound ─────────────────────────────────────
+function playDrum(name, when = 0) {
+  if (!audioCtx || muteActive) return;
+  const buf = drumBuffers[name];
+  if (!buf) return;
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  src.playbackRate.value = pitchRatio;
+  const g = audioCtx.createGain();
+  g.gain.value = 1;
+  src.connect(g);
+  g.connect(masterGain);
+  src.start(audioCtx.currentTime + when);
+  return src;
+}
+
+// ── Beat engine ────────────────────────────────────────────
+let bpm = 128;
+let beatInterval = null;
+let beatCount = 0;
+
+function startBeatEngine() {
+  clearInterval(beatInterval);
+  const interval = 60000 / bpm / 2; // 8th notes
+  beatInterval = setInterval(() => {
+    if (!audioCtx || audioCtx.state === 'suspended') return;
+    if (muteActive) return;
+
+    const step = beatCount % SEQ_STEPS;
+
+    // Sequencer step
+    if (seqPattern[step]) playDrum('kick');
+
+    // Always play hi-hat on every step (alternating)
+    if (beatCount % 2 === 0) playDrum('hihat');
+    else if (beatCount % 8 === 3 || beatCount % 8 === 7) playDrum('snare');
+
+    // Beat flash
+    if (beatCount % 2 === 0) {
+      const flash = document.getElementById('beat-flash');
+      flash.classList.add('bang');
+      setTimeout(() => flash.classList.remove('bang'), 60);
+    }
+
+    // Update sequencer cursor
+    highlightSeqStep(step);
+    beatCount++;
+  }, interval);
+}
+
+function highlightSeqStep(step) {
+  document.querySelectorAll('.seq-step').forEach((el, i) => {
+    el.classList.toggle('current', i === step);
+  });
+}
+
+// ══════════════════════════════════════════════════════
+// MEDIAPIPE HANDS
+// ══════════════════════════════════════════════════════
+const hands = new Hands({
+  locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
+});
+
+hands.setOptions({
+  maxNumHands: 2,
+  modelComplexity: 1,
+  minDetectionConfidence: 0.7,
+  minTrackingConfidence: 0.6,
+});
+
+const video   = document.getElementById('video');
+const camCvs  = document.getElementById('cam-feed');
+const handOvl = document.getElementById('hand-ovl');
+const cCtx    = camCvs.getContext('2d');
+const hCtx    = handOvl.getContext('2d');
+
+let handPositions = { L: null, R: null };
+let smoothL = { x:0.5, y:0.5 }, smoothR = { x:0.5, y:0.5 };
+let firstResult = true;
+let fps = 0, fpsF = 0, fpsL = performance.now();
+
+// Hand trail
+const TRAIL_LEN = 18;
+const trailL = [], trailR = [];
+
+hands.onResults(results => {
+  const W = camCvs.width, H = camCvs.height;
+
+  // FPS
+  fpsF++;
+  const now = performance.now();
+  if (now - fpsL >= 1000) { fps = fpsF; fpsF = 0; fpsL = now; }
+
+  // Draw feed
+  cCtx.save();
+  cCtx.translate(W, 0); cCtx.scale(-1, 1);
+  cCtx.drawImage(results.image, 0, 0, W, H);
+  cCtx.restore();
+
+  hCtx.clearRect(0, 0, W, H);
+
+  if (firstResult) {
+    firstResult = false;
+    document.getElementById('loading').classList.add('gone');
+    document.getElementById('htag-cam').classList.add('on');
+    document.getElementById('htag-cam-txt').textContent = 'Live';
+
+    // Init audio on first result (requires user gesture — MediaPipe camera init counts)
+    if (!audioCtx) initAudio();
+  }
+
+  handPositions = { L: null, R: null };
+
+  if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+    document.getElementById('no-hand').classList.add('show');
+    document.getElementById('htag-hands').classList.remove('on');
+    document.getElementById('htag-hands-txt').textContent = 'No Hands';
+    document.getElementById('hand-L-marker').style.left = '-100px';
+    document.getElementById('hand-R-marker').style.left = '-100px';
+    return;
+  }
+
+  document.getElementById('no-hand').classList.remove('show');
+  document.getElementById('htag-hands').classList.add('on');
+  document.getElementById('htag-hands-txt').textContent = `${results.multiHandLandmarks.length} Hand${results.multiHandLandmarks.length>1?'s':''}`;
+
+  // Assign hands
+  results.multiHandLandmarks.forEach((lm, i) => {
+    const label = results.multiHandedness?.[i]?.label || 'Right';
+    // Note: MediaPipe labels are mirrored
+    const side = label === 'Left' ? 'R' : 'L';
+    const wrist = lm[0];
+    handPositions[side] = { x: wrist.x, y: wrist.y, lm };
+  });
+
+  // Process each hand
+  ['L','R'].forEach(side => {
+    const h = handPositions[side];
+    if (!h) return;
+
+    const smooth = side === 'L' ? smoothL : smoothR;
+    const trail  = side === 'L' ? trailL  : trailR;
+    const col    = side === 'L' ? '#ff00aa' : '#aaff00';
+
+    // Smooth position (mirrored X)
+    smooth.x = smooth.x * 0.7 + (1 - h.x) * 0.3;
+    smooth.y = smooth.y * 0.7 + h.y * 0.3;
+
+    // Add to trail
+    trail.push({ x: smooth.x * W, y: smooth.y * H });
+    if (trail.length > TRAIL_LEN) trail.shift();
+
+    // Draw trail
+    if (trail.length > 1) {
+      for (let i = 1; i < trail.length; i++) {
+        const alpha = i / trail.length;
+        hCtx.save();
+        hCtx.strokeStyle = col;
+        hCtx.globalAlpha = alpha * 0.6;
+        hCtx.lineWidth = alpha * 4;
+        hCtx.shadowColor = col;
+        hCtx.shadowBlur = 10;
+        hCtx.beginPath();
+        hCtx.moveTo(trail[i-1].x, trail[i-1].y);
+        hCtx.lineTo(trail[i].x, trail[i].y);
+        hCtx.stroke();
+        hCtx.restore();
+      }
+    }
+
+    // Draw skeleton
+    drawHandSkeleton(h.lm, W, H, col);
+
+    // Update DOM marker
+    const marker = document.getElementById(`hand-${side}-marker`);
+    marker.style.left = `${smooth.x * 100}%`;
+    marker.style.top  = `${smooth.y * 100}%`;
+
+    // Apply gesture controls
+    if (side === 'L') applyLeftHand(smooth, h.lm);
+    else applyRightHand(smooth, h.lm);
+  });
+
+  // Zone activation
+  updateZones();
+});
+
+// ── Skeleton drawing ────────────────────────────────────
+const HAND_CONNECTIONS = [
+  [0,1],[1,2],[2,3],[3,4],
+  [0,5],[5,6],[6,7],[7,8],
+  [5,9],[9,10],[10,11],[11,12],
+  [9,13],[13,14],[14,15],[15,16],
+  [13,17],[17,18],[18,19],[19,20],[0,17]
+];
+
+function drawHandSkeleton(lm, W, H, col) {
+  hCtx.save();
+  hCtx.strokeStyle = col; hCtx.lineWidth = 1.5;
+  hCtx.shadowColor = col; hCtx.shadowBlur = 8;
+  hCtx.globalAlpha = 0.7;
+
+  HAND_CONNECTIONS.forEach(([a,b]) => {
+    hCtx.beginPath();
+    hCtx.moveTo((1-lm[a].x)*W, lm[a].y*H);
+    hCtx.lineTo((1-lm[b].x)*W, lm[b].y*H);
+    hCtx.stroke();
+  });
+
+  [4,8,12,16,20].forEach(i => {
+    hCtx.beginPath();
+    hCtx.arc((1-lm[i].x)*W, lm[i].y*H, 4, 0, Math.PI*2);
+    hCtx.fillStyle = col; hCtx.shadowBlur = 12;
+    hCtx.fill();
+  });
+
+  hCtx.restore();
+}
+
+// ══════════════════════════════════════════════════════
+// GESTURE CONTROLS
+// ══════════════════════════════════════════════════════
+function dist(a, b) { return Math.hypot(a.x-b.x, a.y-b.y); }
+
+function fingerExtended(lm, tip, pip) {
+  const wrist = lm[0];
+  return dist(lm[tip], wrist) > dist(lm[pip], wrist) * 1.05;
+}
+
+function isFist(lm) {
+  return !fingerExtended(lm,8,6) && !fingerExtended(lm,12,10) && !fingerExtended(lm,16,14) && !fingerExtended(lm,20,18);
+}
+
+function isOpen(lm) {
+  return fingerExtended(lm,8,6) && fingerExtended(lm,12,10) && fingerExtended(lm,16,14) && fingerExtended(lm,20,18);
+}
+
+function isPinch(lm) {
+  return dist(lm[4], lm[8]) < 0.07;
+}
+
+let prevMuteState = false;
+let stutterActive = false;
+
+function applyLeftHand(smooth, lm) {
+  if (!audioCtx) return;
+
+  // X → Filter frequency (100Hz – 20kHz)
+  const filterVal = smooth.x; // 0=left=low, 1=right=high
+  const filterFreq = 100 * Math.pow(200, filterVal); // log scale
+  filterNode.frequency.setTargetAtTime(filterFreq, audioCtx.currentTime, 0.05);
+
+  // Y → Reverb amount (inverted: up=more)
+  const reverbAmt = 1 - smooth.y;
+  reverbGain.gain.setTargetAtTime(reverbAmt * 0.6, audioCtx.currentTime, 0.1);
+  dryGain.gain.setTargetAtTime(0.5 + (1-reverbAmt)*0.5, audioCtx.currentTime, 0.1);
+
+  // Pinch → Loop toggle
+  const pinching = isPinch(lm);
+  if (pinching && !loopActive) {
+    loopActive = true;
+    startLoop();
+    document.getElementById('gv-pinch').textContent = 'LOOP ON';
+    document.getElementById('gv-pinch').style.color = 'var(--acid)';
+  } else if (!pinching && loopActive) {
+    loopActive = false;
+    stopLoop();
+    document.getElementById('gv-pinch').textContent = 'OFF';
+    document.getElementById('gv-pinch').style.color = 'var(--muted)';
+  }
+
+  // Update readouts
+  document.getElementById('ro-filter').style.width = `${filterVal*100}%`;
+  document.getElementById('ro-reverb').style.width = `${reverbAmt*100}%`;
+  document.getElementById('gv-L').textContent = `${Math.round(filterFreq)}Hz`;
+  document.getElementById('gv-Ly').textContent = `${Math.round(reverbAmt*100)}%`;
+
+  // Update knobs
+  updateKnob('filter', filterVal, `${Math.round(filterFreq)}Hz`);
+  updateKnob('reverb', reverbAmt, `${Math.round(reverbAmt*100)}%`);
+}
+
+function applyRightHand(smooth, lm) {
+  if (!audioCtx) return;
+
+  // Y → Volume
+  const vol = 1 - smooth.y;
+  masterGain.gain.setTargetAtTime(vol * 0.9, audioCtx.currentTime, 0.08);
+  document.getElementById('ro-vol').style.width = `${vol*100}%`;
+  document.getElementById('gv-R').textContent = `${Math.round(vol*100)}%`;
+
+  // X → Pitch (±6 semitones)
+  const semitones = (smooth.x - 0.5) * 12;
+  pitchRatio = Math.pow(2, semitones/12);
+  document.getElementById('gv-Rx').textContent = `${semitones > 0 ? '+' : ''}${semitones.toFixed(1)}st`;
+
+  // BPM adjust based on X zones
+  if (smooth.x < 0.2) {
+    bpm = Math.max(80, bpm - 0.2);
+    startBeatEngine();
+  } else if (smooth.x > 0.8) {
+    bpm = Math.min(200, bpm + 0.2);
+    startBeatEngine();
+  }
+  document.getElementById('bpm-num').textContent = Math.round(bpm);
+
+  // Fist → Mute
+  const fist = isFist(lm);
+  if (fist !== prevMuteState) {
+    prevMuteState = fist;
+    muteActive = fist;
+    document.getElementById('gv-fist').textContent = fist ? 'MUTE' : 'OFF';
+    document.getElementById('gv-fist').style.color = fist ? 'var(--mag)' : 'var(--muted)';
+    if (!fist) masterGain.gain.setTargetAtTime(vol*0.9, audioCtx.currentTime, 0.05);
+  }
+
+  // Open palm → Stutter
+  const open = isOpen(lm);
+  if (open && !stutterActive) {
+    stutterActive = true;
+    startStutter();
+    document.getElementById('gv-open').textContent = 'STUTTER';
+    document.getElementById('gv-open').style.color = 'var(--mag)';
+  } else if (!open && stutterActive) {
+    stutterActive = false;
+    stopStutter();
+    document.getElementById('gv-open').textContent = 'OFF';
+    document.getElementById('gv-open').style.color = 'var(--muted)';
+  }
+
+  updateKnob('volume', vol, `${Math.round(vol*100)}%`);
+  updateKnob('pitch', (smooth.x), `${semitones > 0 ? '+' : ''}${semitones.toFixed(1)}st`);
+}
+
+// ── Loop ────────────────────────────────────────────────
+let loopIntervals = [];
+function startLoop() {
+  const rhythm = [0, 250, 500, 750];
+  rhythm.forEach(offset => {
+    const id = setInterval(() => { if (loopActive && audioCtx && !muteActive) playDrum('synth'); }, 1000);
+    loopIntervals.push(id);
+    setTimeout(() => {
+      if (loopActive && audioCtx && !muteActive) playDrum('synth');
+    }, offset);
+  });
+}
+function stopLoop() { loopIntervals.forEach(clearInterval); loopIntervals = []; }
+
+// ── Stutter ─────────────────────────────────────────────
+function startStutter() {
+  clearInterval(stutterInterval);
+  stutterInterval = setInterval(() => {
+    if (!audioCtx || muteActive) return;
+    const g = audioCtx.currentTime;
+    masterGain.gain.setValueAtTime(0.8, g);
+    masterGain.gain.setValueAtTime(0, g + 0.04);
+    masterGain.gain.setValueAtTime(0.8, g + 0.08);
+    masterGain.gain.setValueAtTime(0, g + 0.12);
+    masterGain.gain.setValueAtTime(0.8, g + 0.16);
+  }, 200);
+}
+function stopStutter() {
+  clearInterval(stutterInterval);
+  if (audioCtx) masterGain.gain.setTargetAtTime(0.7, audioCtx.currentTime, 0.05);
+}
+
+// ── Zone activation ─────────────────────────────────────
+function updateZones() {
+  const zones = {
+    TL: smoothL.x < 0.33 && smoothL.y < 0.5,
+    TC: smoothL.x > 0.33 && smoothL.x < 0.67 && smoothL.y < 0.5,
+    TR: smoothL.x > 0.67 && smoothL.y < 0.5,
+    BL: smoothR.x < 0.33 && smoothR.y > 0.5,
+    BC: smoothR.x > 0.33 && smoothR.x < 0.67 && smoothR.y > 0.5,
+    BR: smoothR.x > 0.67 && smoothR.y > 0.5,
+  };
+  Object.entries(zones).forEach(([id, active]) => {
+    document.getElementById(`zone-${id}`)?.classList.toggle('active', active);
+  });
+}
+
+// ══════════════════════════════════════════════════════
+// VISUALISER
+// ══════════════════════════════════════════════════════
+const wfCvs = document.getElementById('waveform');
+const vuCvs = document.getElementById('vu-meter');
+const wfCtx = wfCvs.getContext('2d');
+const vuCtx = vuCvs.getContext('2d');
+
+function drawViz() {
+  requestAnimationFrame(drawViz);
+
+  const wW = wfCvs.offsetWidth || 600;
+  const wH = 80;
+  wfCvs.width = wW * devicePixelRatio;
+  wfCvs.height = wH * devicePixelRatio;
+  wfCtx.scale(devicePixelRatio, devicePixelRatio);
+
+  wfCtx.fillStyle = '#06060f';
+  wfCtx.fillRect(0, 0, wW, wH);
+
+  if (!analyserNode) return;
+
+  const buf = new Uint8Array(analyserNode.frequencyBinCount);
+  analyserNode.getByteFrequencyData(buf);
+
+  const barW = wW / buf.length * 2.5;
+  for (let i = 0; i < buf.length; i++) {
+    const v = buf[i] / 255;
+    const barH = v * wH * 0.9;
+    const hue = 300 - v * 200; // mag to acid
+    wfCtx.fillStyle = `hsl(${hue},100%,${40+v*30}%)`;
+    wfCtx.fillRect(i * barW, wH - barH, barW - 1, barH);
+  }
+
+  // VU meter
+  vuCvs.width  = 80 * devicePixelRatio;
+  vuCvs.height = 80 * devicePixelRatio;
+  vuCtx.scale(devicePixelRatio, devicePixelRatio);
+  vuCtx.fillStyle = '#06060f';
+  vuCtx.fillRect(0, 0, 80, 80);
+
+  // RMS
+  const timeBuf = new Uint8Array(analyserNode.fftSize);
+  analyserNode.getByteTimeDomainData(timeBuf);
+  let sum = 0;
+  for (let i = 0; i < timeBuf.length; i++) { const s = (timeBuf[i]-128)/128; sum += s*s; }
+  const rms = Math.sqrt(sum / timeBuf.length);
+  const vuH = rms * 80 * 4;
+  const vuGrad = vuCtx.createLinearGradient(0, 80, 0, 80-vuH);
+  vuGrad.addColorStop(0, '#aaff00');
+  vuGrad.addColorStop(0.6, '#ff6600');
+  vuGrad.addColorStop(1, '#ff00aa');
+  vuCtx.fillStyle = vuGrad;
+  vuCtx.fillRect(10, 80-Math.min(70,vuH), 60, Math.min(70,vuH));
+}
+
+drawViz();
+
+// ══════════════════════════════════════════════════════
+// KNOB UI
+// ══════════════════════════════════════════════════════
+const KNOBS = [
+  { id:'volume',  label:'Volume',  color:'#aaff00', val:0.7 },
+  { id:'filter',  label:'Filter',  color:'#ff00aa', val:0.7 },
+  { id:'reverb',  label:'Reverb',  color:'#00ffee', val:0.2 },
+  { id:'pitch',   label:'Pitch',   color:'#ff6600', val:0.5 },
+  { id:'bpm',     label:'BPM',     color:'#8800ff', val:0.5 },
+  { id:'gain',    label:'Drive',   color:'#ff00aa', val:0.5 },
+];
+
+const knobGrid = document.getElementById('knob-grid');
+
+KNOBS.forEach(k => {
+  const wrap = document.createElement('div');
+  wrap.className = 'knob-wrap';
+  const circ = 2 * Math.PI * 22;
+  wrap.innerHTML = `
+    <div class="knob">
+      <svg viewBox="0 0 52 52">
+        <circle cx="26" cy="26" r="22" stroke="#1e1e50" stroke-width="4" fill="none"/>
+        <circle cx="26" cy="26" r="22" stroke="${k.color}" stroke-width="4" fill="none"
+          stroke-dasharray="${circ}" stroke-dashoffset="${circ*(1-k.val)}"
+          id="karc-${k.id}" stroke-linecap="round"
+          style="transform-origin:center;transform:rotate(-90deg);transition:stroke-dashoffset 0.1s"/>
+      </svg>
+    </div>
+    <div class="knob-val" id="kval-${k.id}" style="color:${k.color}">—</div>
+    <div class="knob-name">${k.label}</div>`;
+  knobGrid.appendChild(wrap);
+});
+
+function updateKnob(id, val, label) {
+  const arc = document.getElementById(`karc-${id}`);
+  const txt = document.getElementById(`kval-${id}`);
+  if (!arc || !txt) return;
+  const circ = 2 * Math.PI * 22;
+  arc.style.strokeDashoffset = circ * (1 - Math.max(0, Math.min(1, val)));
+  txt.textContent = label;
+}
+
+// Update BPM knob from beat engine
+setInterval(() => {
+  updateKnob('bpm', (bpm-80)/120, `${Math.round(bpm)}`);
+}, 500);
+
+// ══════════════════════════════════════════════════════
+// BEAT PADS
+// ══════════════════════════════════════════════════════
+const PADS = [
+  { name:'KICK',  drum:'kick',  color:'#ff00aa', rgb:'255,0,170', key:'Q' },
+  { name:'SNARE', drum:'snare', color:'#aaff00', rgb:'170,255,0', key:'W' },
+  { name:'HIHAT', drum:'hihat', color:'#00ffee', rgb:'0,255,238', key:'E' },
+  { name:'CLAP',  drum:'clap',  color:'#ff6600', rgb:'255,102,0', key:'R' },
+  { name:'BASS',  drum:'bass',  color:'#8800ff', rgb:'136,0,255', key:'A' },
+  { name:'SYNTH', drum:'synth', color:'#ff00aa', rgb:'255,0,170', key:'S' },
+  { name:'TOM',   drum:'tom',   color:'#aaff00', rgb:'170,255,0', key:'D' },
+  { name:'RIDE',  drum:'ride',  color:'#00ffee', rgb:'0,255,238', key:'F' },
+];
+
+const padGrid = document.getElementById('pad-grid');
+PADS.forEach(p => {
+  const btn = document.createElement('button');
+  btn.className = 'beat-pad';
+  btn.dataset.drum = p.drum;
+  btn.style.setProperty('--color', p.color);
+  btn.style.setProperty('--rgb', p.rgb);
+  btn.innerHTML = `<span class="pad-name">${p.name}</span><span class="pad-key">${p.key}</span>`;
+  btn.addEventListener('mousedown', () => {
+    if (!audioCtx) initAudio();
+    playDrum(p.drum);
+    btn.classList.add('playing');
+    setTimeout(() => btn.classList.remove('playing'), 150);
+  });
+  padGrid.appendChild(btn);
+});
+
+// Keyboard shortcuts
+const keyMap = {};
+PADS.forEach(p => keyMap[p.key.toLowerCase()] = p.drum);
+document.addEventListener('keydown', e => {
+  const drum = keyMap[e.key.toLowerCase()];
+  if (drum) { if (!audioCtx) initAudio(); playDrum(drum); }
+  if (e.key === ' ') { e.preventDefault(); bpm = bpm === 128 ? 92 : bpm === 92 ? 160 : 128; startBeatEngine(); }
+});
+
+// ══════════════════════════════════════════════════════
+// STEP SEQUENCER UI
+// ══════════════════════════════════════════════════════
+const seqGrid = document.getElementById('seq-grid');
+seqPattern.forEach((on, i) => {
+  const step = document.createElement('div');
+  step.className = `seq-step${on ? ' on' : ''}`;
+  step.dataset.step = i;
+  step.addEventListener('click', () => {
+    seqPattern[i] = seqPattern[i] ? 0 : 1;
+    step.classList.toggle('on', !!seqPattern[i]);
+  });
+  seqGrid.appendChild(step);
+});
+
+// ══════════════════════════════════════════════════════
+// CAMERA + MEDIAPIPE
+// ══════════════════════════════════════════════════════
+async function startCamera() {
+  document.getElementById('load-msg').textContent = 'Requesting camera…';
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { width: { ideal: 1280 }, height: { ideal: 720 } }
+  });
+  video.srcObject = stream;
+  await new Promise(r => video.onloadedmetadata = r);
+  video.play();
+
+  camCvs.width  = handOvl.width  = video.videoWidth;
+  camCvs.height = handOvl.height = video.videoHeight;
+
+  document.getElementById('load-msg').textContent = 'Loading hand model…';
+
+  const mpCam = new Camera(video, {
+    onFrame: async () => { await hands.send({ image: video }); },
+    width: video.videoWidth,
+    height: video.videoHeight,
+  });
+  mpCam.start();
+}
+
+window.addEventListener('load', async () => {
+  try {
+    await startCamera();
+  } catch(err) {
+    document.getElementById('loading').innerHTML = `
+      <div style="font-family:'Audiowide',cursive;font-size:1.5rem;color:var(--mag);letter-spacing:0.2em">ERROR</div>
+      <div style="font-size:0.55rem;color:var(--muted);letter-spacing:0.12em;margin-top:0.5rem">${err.message}</div>
+      <div style="font-size:0.5rem;color:#333;margin-top:0.4rem">Allow camera access and reload</div>`;
+  }
+});
+</script>
+</body>
+</html>
